@@ -14,11 +14,14 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 /*** defines ***/ 
 #define KORE_VERSION "0.1"
-#define CTRL_KEY(k) ((k) & 0x1f)
 
+#define TAB_SIZE 4
+
+#define CTRL_KEY(k) ((k) & 0x1f)
 #define ARROW_LEFT 1000
 #define ARROW_RIGHT 1001
 #define ARROW_UP 1002
@@ -40,7 +43,7 @@ struct ERow {
 
 struct EditorConfig
 {
-    int cx, cy;
+    int cx, cy, rx;
     int row_off;
     int col_off;
     int screen_rows;
@@ -163,9 +166,14 @@ int get_window_size(int *rows, int *cols){
 
 #pragma region ROW_OPERATIONS
 
-void editor_update_row(ERow row){
-    row.render = std::string(row.str);
-    row.rsize = row.render.size();
+void editor_update_row(ERow *row){
+    row->render = std::string(row->str);
+    for (auto pos = row->render.find('\t'); pos != std::string::npos;){
+        row->render.replace(pos, std::string::npos, TAB_SIZE, ' ');
+        pos = row->render.find('\t', pos+TAB_SIZE);
+    }
+    //row->render.replace(row->render.begin(), row->render.end(), TAB_SIZE, ' ');
+    row->rsize = row->render.size();
 }
 
 
@@ -175,7 +183,7 @@ void editor_append_row(std::string str){
     E.row[index].str = std::string(str);
     E.row[index].size = str.size();
     
-    editor_update_row(E.row[index]);
+    editor_update_row(&E.row[index]);
     E.num_rows++;
 }
 #pragma endregion ROW_OPERATIONS
@@ -206,18 +214,33 @@ void editor_open(char *file_name){
 #pragma region OUTPUT
 /*** output ***/
 
+int editor_cx_to_rx(ERow row, int cx){
+    //int rx = cx + std::count(row.str.begin(), row.str.end(), '\t')*((TAB_SIZE-1)-(rx%TAB_SIZE));
+    int rx = 0;
+    for(int i = 0; i < cx; i++){
+        if(row.str[i] == '\t')
+            rx += (TAB_SIZE-1)-(rx%TAB_SIZE);
+        rx++;
+    }
+    return rx;
+}
+
 void editor_scroll(){
+    E.rx = 0;
+    if(E.cy < E.num_rows){
+        E.rx = editor_cx_to_rx(E.row[E.cy], E.cx);
+    }
     if(E.cy < E.row_off){
         E.row_off = E.cy;
     }
     if(E.cy >= E.row_off + E.screen_rows){
         E.row_off = E.cy - E.screen_rows + 1;
     }
-    if(E.cx < E.col_off){
-        E.col_off = E.cx;
+    if(E.rx < E.col_off){
+        E.col_off = E.rx;
     }
-    if(E.cx >= E.col_off + E.screen_cols){
-        E.col_off = E.cx - E.screen_cols + 1;
+    if(E.rx >= E.col_off + E.screen_cols){
+        E.col_off = E.rx - E.screen_cols + 1;
     }
 }
 
@@ -245,7 +268,7 @@ void editor_draw_rows(std::string *buff){
                 buff->append(">", 1);
             }
         } else {
-            buff->append(E.row[file_row].str.substr(E.col_off));
+            buff->append(E.row[file_row].render.substr(E.col_off));
         }
         buff->append("\x1b[K", 3); //erase line to right of cursor
         if(y < E.screen_rows-1){
@@ -270,7 +293,7 @@ void editor_refresh_screen(){
     editor_draw_rows(&buff);
 
     char tempbuff[32];
-    snprintf(tempbuff, sizeof(tempbuff), "\x1b[%d;%dH", (E.cy-E.row_off)+1, (E.cx-E.col_off)+1);
+    snprintf(tempbuff, sizeof(tempbuff), "\x1b[%d;%dH", (E.cy-E.row_off)+1, (E.rx-E.col_off)+1);
     buff.append(tempbuff);
 
     buff.append("\x1b[?25h", 6);
@@ -355,6 +378,7 @@ void editor_process_keypress(){
 void init_editor(){
     E.cx = 0;
     E.cy = 0;
+    E.rx = 0;
     E.row_off = 0;
     E.col_off = 0;
     E.num_rows = 0;

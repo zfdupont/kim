@@ -33,13 +33,16 @@
 /*** data ***/
 struct ERow {
     int size;
+    int rsize;
     std::string str;
+    std::string render;
 };
 
 struct EditorConfig
 {
     int cx, cy;
     int row_off;
+    int col_off;
     int screen_rows;
     int screen_cols;
     int num_rows;
@@ -157,13 +160,26 @@ int get_window_size(int *rows, int *cols){
 }
 #pragma endregion TERMINAL
 
+
+#pragma region ROW_OPERATIONS
+
+void editor_update_row(ERow row){
+    row.render = std::string(row.str);
+    row.rsize = row.render.size();
+}
+
+
 void editor_append_row(std::string str){
     E.row.resize(E.num_rows+1);
     int index = E.num_rows;
     E.row[index].str = std::string(str);
     E.row[index].size = str.size();
+    
+    editor_update_row(E.row[index]);
     E.num_rows++;
 }
+#pragma endregion ROW_OPERATIONS
+
 
 #pragma region FILEIO
 
@@ -197,6 +213,12 @@ void editor_scroll(){
     if(E.cy >= E.row_off + E.screen_rows){
         E.row_off = E.cy - E.screen_rows + 1;
     }
+    if(E.cx < E.col_off){
+        E.col_off = E.cx;
+    }
+    if(E.cx >= E.col_off + E.screen_cols){
+        E.col_off = E.cx - E.screen_cols + 1;
+    }
 }
 
 void editor_draw_rows(std::string *buff){
@@ -223,11 +245,7 @@ void editor_draw_rows(std::string *buff){
                 buff->append(">", 1);
             }
         } else {
-            int len = E.row[file_row].size;
-            if(len > E.screen_cols){
-                len = E.screen_cols;
-            }
-            buff->append(E.row[file_row].str.data(), len);
+            buff->append(E.row[file_row].str.substr(E.col_off));
         }
         buff->append("\x1b[K", 3); //erase line to right of cursor
         if(y < E.screen_rows-1){
@@ -252,7 +270,7 @@ void editor_refresh_screen(){
     editor_draw_rows(&buff);
 
     char tempbuff[32];
-    snprintf(tempbuff, sizeof(tempbuff), "\x1b[%d;%dH", E.cy+1, E.cx+1);
+    snprintf(tempbuff, sizeof(tempbuff), "\x1b[%d;%dH", (E.cy-E.row_off)+1, (E.cx-E.col_off)+1);
     buff.append(tempbuff);
 
     buff.append("\x1b[?25h", 6);
@@ -278,15 +296,24 @@ void editor_move_cursor(int key){
         case ARROW_LEFT:
             if(E.cx != 0)
                 E.cx--;
+            else if(E.cy > 0)
+                E.cx = E.row[--E.cy].size;
             break;
         case ARROW_DOWN:
             if(E.cy != E.num_rows - 1)
                 E.cy++;
             break;
         case ARROW_RIGHT:
-            if(E.cx != E.screen_cols - 1)
+            if(E.cy < E.num_rows && E.cx < E.row[E.cy].size)
                 E.cx++;
+            else if(E.cy < E.num_rows && E.cx == E.row[E.cy].size)
+                E.cy++, E.cx = 0;
             break;
+    }
+    //snap to end of next line
+    int len = (E.cy < E.num_rows) ? E.row[E.cy].size : 0;
+    if(E.cx > len){
+        E.cx = len;
     }
 }
 
@@ -329,6 +356,7 @@ void init_editor(){
     E.cx = 0;
     E.cy = 0;
     E.row_off = 0;
+    E.col_off = 0;
     E.num_rows = 0;
     E.row = std::vector<ERow>();
     if(get_window_size(&E.screen_rows, &E.screen_cols) == -1)

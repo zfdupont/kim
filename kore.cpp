@@ -9,12 +9,14 @@
 #include <cstdio>
 #include <cerrno>
 #include <cstring>
+#include <cstdarg>
 
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <chrono>
 
 /*** defines ***/ 
 #define KORE_VERSION "0.1"
@@ -48,8 +50,11 @@ struct EditorConfig
     int col_off;
     int screen_rows;
     int screen_cols;
-    int num_rows;
+    int max_rows;
     std::vector<ERow> row;
+    std::string file_name;
+    std::string status_msg;
+    std::chrono::steady_clock::time_point status_time;
     termios og_termios;
 };
 
@@ -178,13 +183,13 @@ void editor_update_row(ERow *row){
 
 
 void editor_append_row(std::string str){
-    E.row.resize(E.num_rows+1);
-    int index = E.num_rows;
+    E.row.resize(E.max_rows+1);
+    int index = E.max_rows;
     E.row[index].str = std::string(str);
     E.row[index].size = str.size();
     
     editor_update_row(&E.row[index]);
-    E.num_rows++;
+    E.max_rows++;
 }
 #pragma endregion ROW_OPERATIONS
 
@@ -192,6 +197,8 @@ void editor_append_row(std::string str){
 #pragma region FILEIO
 
 void editor_open(char *file_name){
+    E.file_name = std::string(file_name);
+
     std::ifstream in_file(file_name);
     if(!in_file)
         die("std::ifstream::open");
@@ -227,7 +234,7 @@ int editor_cx_to_rx(ERow row, int cx){
 
 void editor_scroll(){
     E.rx = 0;
-    if(E.cy < E.num_rows){
+    if(E.cy < E.max_rows){
         E.rx = editor_cx_to_rx(E.row[E.cy], E.cx);
     }
     if(E.cy < E.row_off){
@@ -247,8 +254,8 @@ void editor_scroll(){
 void editor_draw_rows(std::string *buff){
     for(int y = 0; y < E.screen_rows-1; y++){
         int file_row = y + E.row_off; //account for row_offset
-        if(file_row >= E.num_rows){ // check if row is part of the text buffer
-            if (E.num_rows == 0 && y == E.screen_rows / 3) { // print welcome message 1/3 down the screen
+        if(file_row >= E.max_rows){ // check if row is part of the text buffer
+            if (E.max_rows == 0 && y == E.screen_rows / 3) { // print welcome message 1/3 down the screen
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome), "Kore editor -- ver %s", KORE_VERSION);
                 if(welcomelen > E.screen_cols){
@@ -271,10 +278,40 @@ void editor_draw_rows(std::string *buff){
             buff->append(E.row[file_row].render.substr(E.col_off));
         }
         buff->append("\x1b[K", 3); //erase line to right of cursor
-        if(y < E.screen_rows-1){
-            buff->append("\r\n", 2);
-        }
+        buff->append("\r\n", 2);
     }
+}
+
+void editor_draw_status(std::string *buff){
+    buff->append("\x1b[7m", 4);
+    char status[80], rstatus[80];
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.file_name.size() > 0 ? E.file_name.c_str() : "[No Name]", E.max_rows);
+    int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy+1, E.max_rows);
+    if(len > E.screen_cols)
+        len = E.screen_cols;
+    buff->append(status, len);
+    for(int i = len; i < E.screen_cols; i++){
+        if(E.screen_cols - i == rlen){
+            buff->append(rstatus, rlen);
+            break;
+        } else{
+            buff->append(" ", 1);
+            
+        }
+        
+    }
+    buff->append("\x1b[m", 3);
+    buff->append("\r\n", 2);
+}
+
+void editor_draw_msg(std::string *buff){
+    buff->append("\x1b[K", 3);
+    int msglen = E.status_msg.length();
+    if(msglen > E.screen_cols)
+        msglen = E.screen_cols;
+    auto t = std::chrono::duration_cast<std::chrono::duration<int>>(std::chrono::steady_clock::now() - E.status_time);
+    if(msglen && t.count() < 5)
+        buff->append(E.status_msg);
 }
 
 void editor_refresh_screen(){
@@ -291,6 +328,8 @@ void editor_refresh_screen(){
     buff.append("\x1b[H", 3);
 
     editor_draw_rows(&buff);
+    editor_draw_status(&buff);
+    editor_draw_msg(&buff);
 
     char tempbuff[32];
     snprintf(tempbuff, sizeof(tempbuff), "\x1b[%d;%dH", (E.cy-E.row_off)+1, (E.rx-E.col_off)+1);
@@ -303,6 +342,17 @@ void editor_refresh_screen(){
 
     write(STDOUT_FILENO, cbuff, buff.length()); 
 }
+
+void editor_set_status(const char *fmt, ...){
+    char msg[80];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    E.status_msg = std::string(msg);
+    E.status_time = std::chrono::steady_clock::now();
+}
+
 #pragma endregion OUTPUT
 
 
@@ -323,18 +373,18 @@ void editor_move_cursor(int key){
                 E.cx = E.row[--E.cy].size;
             break;
         case ARROW_DOWN:
-            if(E.cy != E.num_rows - 1)
+            if(E.cy < E.max_rows)
                 E.cy++;
             break;
         case ARROW_RIGHT:
-            if(E.cy < E.num_rows && E.cx < E.row[E.cy].size)
+            if(E.cy < E.max_rows && E.cx < E.row[E.cy].size)
                 E.cx++;
-            else if(E.cy < E.num_rows && E.cx == E.row[E.cy].size)
+            else if(E.cy < E.max_rows && E.cx == E.row[E.cy].size)
                 E.cy++, E.cx = 0;
             break;
     }
     //snap to end of next line
-    int len = (E.cy < E.num_rows) ? E.row[E.cy].size : 0;
+    int len = (E.cy < E.max_rows) ? E.row[E.cy].size : 0;
     if(E.cx > len){
         E.cx = len;
     }
@@ -357,6 +407,13 @@ void editor_process_keypress(){
         case PAGE_UP:
         case PAGE_DOWN:
             {
+                if(c == PAGE_UP){
+                    E.cy = E.row_off;
+                } else if(c == PAGE_DOWN){
+                    E.cy = E.row_off + E.screen_cols - 1;
+                    if(E.cy > E.max_rows)
+                        E.cy = E.max_rows;
+                }
                 int x = E.screen_rows;
                 while(x--)
                     editor_move_cursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
@@ -366,7 +423,8 @@ void editor_process_keypress(){
             E.cx = 0;
             break;
         case END_KEY:
-            E.cx = E.screen_cols - 1;
+            if(E.cy < E.max_rows)
+                E.cx = E.row[E.cy].size;
             break;
     }
 }
@@ -381,11 +439,12 @@ void init_editor(){
     E.rx = 0;
     E.row_off = 0;
     E.col_off = 0;
-    E.num_rows = 0;
+    E.max_rows = 0;
     E.row = std::vector<ERow>();
+    E.file_name = "";
     if(get_window_size(&E.screen_rows, &E.screen_cols) == -1)
         die("get_window_size");
-    
+    E.screen_rows -= 2;
 }
 
 int main(int argc, char *argv[]){
@@ -394,6 +453,8 @@ int main(int argc, char *argv[]){
     if(argc >= 2){
         editor_open(argv[1]);
     }
+    
+    editor_set_status("HELP: CTRL-Q to quit");
 
     while(true){
         editor_refresh_screen();

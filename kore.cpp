@@ -17,6 +17,7 @@
 #include <vector>
 #include <algorithm>
 #include <chrono>
+#include <sstream>
 
 /*** defines ***/ 
 #define KORE_VERSION "0.1"
@@ -33,6 +34,9 @@
 #define PAGE_DOWN 1006
 #define END_KEY 1007
 #define DELETE_KEY 1008
+#define BACKSPACE 127
+
+void editor_set_status(const char*, ...);
 
 #pragma region DATA
 /*** data ***/
@@ -181,7 +185,6 @@ void editor_update_row(ERow *row){
     row->rsize = row->render.size();
 }
 
-
 void editor_append_row(std::string str){
     E.row.resize(E.max_rows+1);
     int index = E.max_rows;
@@ -191,10 +194,36 @@ void editor_append_row(std::string str){
     editor_update_row(&E.row[index]);
     E.max_rows++;
 }
+
+void editor_row_insert_char(ERow *row, int at, char c){
+    if(at < 0 || at > row->size)
+        at = row->size;
+    row->str.insert(at, 1, c);
+    row->size++;
+    editor_update_row(row);
+}
 #pragma endregion ROW_OPERATIONS
 
 
+#pragma region EDITOR_OPERATIONS
+void editor_insert_char(int c){
+    if(E.cy == E.max_rows)
+        editor_append_row("");
+    editor_row_insert_char(&E.row[E.cy], E.cx++, c);
+}
+#pragma endregion EDITOR_OPERATIONS
+
+
 #pragma region FILEIO
+
+std::string editor_rows_to_string(){
+    std::stringstream ss;
+
+    for(auto row : E.row){
+        ss << row.str << "\n";
+    }
+    return ss.str();
+}
 
 void editor_open(char *file_name){
     E.file_name = std::string(file_name);
@@ -213,6 +242,18 @@ void editor_open(char *file_name){
     
 
     in_file.close();
+}
+
+void editor_save(){ //TODO: make saving more secure
+    if(E.file_name.size() == 0)
+        return;
+    std::string buff = editor_rows_to_string();
+    std::ofstream out_file(E.file_name, std::ofstream::out);
+    if(!out_file.is_open())
+        editor_set_status("Can't save: %s", strerror(errno));
+    out_file << buff;
+    out_file.close();
+    editor_set_status("%d bytes saved to disk.", buff.length());
 }
 
 #pragma endregion FILEIO
@@ -398,6 +439,8 @@ void editor_process_keypress(){
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
             break;
+        case CTRL_KEY('s'):
+            editor_save();
         case ARROW_UP:
         case ARROW_DOWN:
         case ARROW_LEFT:
@@ -425,6 +468,18 @@ void editor_process_keypress(){
         case END_KEY:
             if(E.cy < E.max_rows)
                 E.cx = E.row[E.cy].size;
+            break;
+        case BACKSPACE:
+        case DELETE_KEY:
+        case CTRL_KEY('h'):
+            break;
+        case '\r': // ENTER KEY
+            break;
+        case CTRL_KEY('l'): //useless
+        case '\x1b':
+            break;
+        default:
+            editor_insert_char(c);
             break;
     }
 }

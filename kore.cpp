@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <chrono>
 #include <sstream>
+#include <iterator>
 
 /*** defines ***/ 
 #define KORE_VERSION "0.1"
@@ -37,6 +38,7 @@
 #define BACKSPACE 127
 
 void editor_set_status(const char*, ...);
+std::string editor_prompt(std::string);
 
 #pragma region DATA
 /*** data ***/
@@ -55,6 +57,7 @@ struct EditorConfig
     int screen_rows;
     int screen_cols;
     int max_rows;
+    bool edited;
     std::vector<ERow> row;
     std::string file_name;
     std::string status_msg;
@@ -110,7 +113,7 @@ int editor_read_key(){
         if(nread == -1 && errno != EAGAIN)
             die("read");
     
-    //arrow key sends '\x1b'+'['+{A|B|C|D} as input
+    //arrow key sends '\x1b'+'['+{A|B|      3|D} as input
     //page up/down sends '\x1b'+'['+{5|6} + '~'
     if(c == '\x1b'){
         char seq[3];
@@ -175,6 +178,28 @@ int get_window_size(int *rows, int *cols){
 
 #pragma region ROW_OPERATIONS
 
+int editor_cx_to_rx(ERow row, int cx){
+    //int rx = cx + std::count(row.str.begin(), row.str.end(), '\t')*((TAB_SIZE-1)-(rx%TAB_SIZE));
+    int rx = 0;
+    for(int i = 0; i < cx; i++){
+        if(row.str[i] == '\t')
+            rx += (TAB_SIZE-1)-(rx%TAB_SIZE);
+        rx++;
+    }
+    return rx;
+}
+int editor_rx_to_cx(ERow row, int rx){
+    //int rx = cx + std::count(row.str.begin(), row.str.end(), '\t')*((TAB_SIZE-1)-(rx%TAB_SIZE));
+    int temp = 0;
+    int i = 0;
+    for(; i < row.size, temp <= rx; i++){
+        if(row.str[i] == '\t')
+            temp += (TAB_SIZE-1)-(temp%TAB_SIZE);
+        temp++;
+    }
+    return i;
+}
+
 void editor_update_row(ERow *row){
     row->render = std::string(row->str);
     for (auto pos = row->render.find('\t'); pos != std::string::npos;){
@@ -185,14 +210,24 @@ void editor_update_row(ERow *row){
     row->rsize = row->render.size();
 }
 
+void editor_insert_row(int at, std::string str){
+    if(at < 0 || at > E.max_rows)
+        return;
+    E.row.resize(++E.max_rows);
+    E.row.insert(E.row.begin()+at, (ERow){(int)str.size(), 0, std::string(str), ""});
+    editor_update_row(&E.row[at]);
+    E.edited = true;
+}
+
 void editor_append_row(std::string str){
-    E.row.resize(E.max_rows+1);
-    int index = E.max_rows;
-    E.row[index].str = std::string(str);
-    E.row[index].size = str.size();
-    
-    editor_update_row(&E.row[index]);
-    E.max_rows++;
+    editor_insert_row(E.max_rows, str);
+}
+
+void editor_row_append_string(ERow *row, std::string s){
+    row->str.append(s);
+    row->size = row->str.size();
+    editor_update_row(row);
+    E.edited = true;
 }
 
 void editor_row_insert_char(ERow *row, int at, char c){
@@ -201,6 +236,23 @@ void editor_row_insert_char(ERow *row, int at, char c){
     row->str.insert(at, 1, c);
     row->size++;
     editor_update_row(row);
+    E.edited = true;
+}
+
+void editor_row_delete_char(ERow *row, int at){
+    if(at < 0 || at >= row->size)
+        return;
+    row->str.erase(at, 1);
+    row->size--;
+    editor_update_row(row);
+    E.edited = true;
+}
+
+void editor_delete_row(int at){
+    if(at < 0 || at >= E.max_rows)
+        return;
+    E.row.erase(E.row.begin()+at);
+    E.max_rows--;
 }
 #pragma endregion ROW_OPERATIONS
 
@@ -211,6 +263,31 @@ void editor_insert_char(int c){
         editor_append_row("");
     editor_row_insert_char(&E.row[E.cy], E.cx++, c);
 }
+
+void editor_delete_char(){
+    if(E.cy == E.max_rows || E.cx == 0 && E.cy == 0)
+        return;
+    if(E.cx > 0){
+        editor_row_delete_char(&E.row[E.cy], --E.cx);
+    } else {
+        E.cx = E.row[E.cy-1].size;
+        editor_row_append_string(&E.row[E.cy-1], E.row[E.cy].str);
+        editor_delete_row(E.cy--);
+    }
+}
+
+void editor_insert_newline(){
+    if(E.cx == 0){
+        editor_insert_row(E.cy, "");
+    } else {
+        editor_insert_row(E.cy+1, E.row[E.cy].str.substr(E.cx));
+        E.row[E.cy].str.erase(E.cx);
+        E.row[E.cy].size = E.cx;
+        editor_update_row(&E.row[E.cy]);
+    }
+    E.cx = 0;
+    E.cy++;
+}
 #pragma endregion EDITOR_OPERATIONS
 
 
@@ -218,7 +295,6 @@ void editor_insert_char(int c){
 
 std::string editor_rows_to_string(){
     std::stringstream ss;
-
     for(auto row : E.row){
         ss << row.str << "\n";
     }
@@ -242,11 +318,15 @@ void editor_open(char *file_name){
     
 
     in_file.close();
+    E.edited = false;
 }
 
 void editor_save(){ //TODO: make saving more secure
     if(E.file_name.size() == 0)
-        return;
+        if((E.file_name = editor_prompt("Save as: %s")).size() == 0){
+            editor_set_status("Save exited");    
+            return;
+        }
     std::string buff = editor_rows_to_string();
     std::ofstream out_file(E.file_name, std::ofstream::out);
     if(!out_file.is_open())
@@ -254,24 +334,36 @@ void editor_save(){ //TODO: make saving more secure
     out_file << buff;
     out_file.close();
     editor_set_status("%d bytes saved to disk.", buff.length());
+    E.edited = false;
 }
 
 #pragma endregion FILEIO
 
+#pragma region SPECIAL_FUNCTIONS
+
+bool match_insensitive(char a, char b){
+    return (tolower(a) == tolower(b));
+}
+
+void editor_find(){
+    std::string target = editor_prompt("Find: %s (ESC to cancel)");
+    if(target.size() == 0)
+        return;
+    std::string::iterator f;
+    for(int i = 0; i < E.max_rows; i++){
+        if((f = std::search(E.row[i].render.begin(), E.row[i].render.end(), target.begin(), target.end(), match_insensitive)) != E.row[i].render.end()){
+            E.cx = editor_rx_to_cx(E.row[i], f - E.row[i].render.begin()); 
+            E.cy = i;
+            E.row_off = E.max_rows;
+            return;
+        }
+    }
+    editor_set_status("%s not found.", target.c_str());
+}
+#pragma endregion SPECIAL_FUNCTIONS
 
 #pragma region OUTPUT
 /*** output ***/
-
-int editor_cx_to_rx(ERow row, int cx){
-    //int rx = cx + std::count(row.str.begin(), row.str.end(), '\t')*((TAB_SIZE-1)-(rx%TAB_SIZE));
-    int rx = 0;
-    for(int i = 0; i < cx; i++){
-        if(row.str[i] == '\t')
-            rx += (TAB_SIZE-1)-(rx%TAB_SIZE);
-        rx++;
-    }
-    return rx;
-}
 
 void editor_scroll(){
     E.rx = 0;
@@ -326,7 +418,7 @@ void editor_draw_rows(std::string *buff){
 void editor_draw_status(std::string *buff){
     buff->append("\x1b[7m", 4);
     char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.file_name.size() > 0 ? E.file_name.c_str() : "[No Name]", E.max_rows);
+    int len = snprintf(status, sizeof(status), "%.20s%s - %d lines", (E.file_name.size() > 0 ? E.file_name.c_str() : "[No Name]"), (E.edited ? "(*)" : ""),  E.max_rows);
     int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy+1, E.max_rows);
     if(len > E.screen_cols)
         len = E.screen_cols;
@@ -400,6 +492,28 @@ void editor_set_status(const char *fmt, ...){
 #pragma region INPUT
 /*** input ***/ 
 
+std::string editor_prompt(std::string prompt){
+    std::string res;
+    while(true){
+        editor_set_status(prompt.c_str(), res.c_str());
+        editor_refresh_screen();
+        int c = editor_read_key();
+        if(c == '\r'){
+            if(res.length() > 0){
+                editor_set_status("");
+                return res;
+            }
+        } else if(c == BACKSPACE){
+            res.pop_back();
+        } else if(c == '\x1b'){
+            editor_set_status("");
+            return "";
+        }else if(!iscntrl(c) && c < 128){
+            res.push_back(c);
+        } 
+    }
+}
+
 void editor_move_cursor(int key){
     switch (key)
     {
@@ -441,6 +555,8 @@ void editor_process_keypress(){
             break;
         case CTRL_KEY('s'):
             editor_save();
+        case CTRL_KEY('f'):
+            editor_find();
         case ARROW_UP:
         case ARROW_DOWN:
         case ARROW_LEFT:
@@ -470,12 +586,17 @@ void editor_process_keypress(){
                 E.cx = E.row[E.cy].size;
             break;
         case BACKSPACE:
+            editor_delete_char();
+            break;
         case DELETE_KEY:
-        case CTRL_KEY('h'):
+            editor_move_cursor(ARROW_RIGHT);
+            editor_delete_char();
             break;
         case '\r': // ENTER KEY
+            editor_insert_newline();
             break;
         case CTRL_KEY('l'): //useless
+        case CTRL_KEY('h'):
         case '\x1b':
             break;
         default:
@@ -497,6 +618,7 @@ void init_editor(){
     E.max_rows = 0;
     E.row = std::vector<ERow>();
     E.file_name = "";
+    E.edited = false;
     if(get_window_size(&E.screen_rows, &E.screen_cols) == -1)
         die("get_window_size");
     E.screen_rows -= 2;

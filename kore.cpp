@@ -37,8 +37,38 @@
 #define DELETE_KEY 1008
 #define BACKSPACE 127
 
+bool match_insensitive(char, char);
+int editor_cx_to_rx(ERow, int);
+int editor_read_key();
+int editor_rx_to_cx(ERow, int);
+int get_window_size(int*, int*);
+void die(const char*);
+void disable_raw_mode();
+void editor_append_row(std::string);
+void editor_delete_char();
+void editor_delete_row(int);
+void editor_draw_msg(std::string*);
+void editor_draw_rows(std::string*);
+void editor_draw_status(std::string*);
+void editor_find();
+void editor_insert_char(int);
+void editor_insert_newline();
+void editor_insert_row(int, std::string);
+void editor_move_cursor(int);
+void editor_open(char*);
+void editor_open(char*);
+void editor_process_keypress();
+void editor_refresh_screen();
+void editor_row_append_string(ERow*, std::string);
+void editor_row_delete_char(ERow*, int);
+void editor_row_insert_char(ERow*, int, char);
+void editor_scroll();
 void editor_set_status(const char*, ...);
+void editor_update_row(ERow*);
+void enable_raw_mode();
+void init_editor();
 std::string editor_prompt(std::string);
+std::string editor_rows_to_string();
 
 #pragma region DATA
 /*** data ***/

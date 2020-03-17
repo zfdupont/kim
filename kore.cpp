@@ -1,85 +1,26 @@
+#include "kore.h"
 
-/*** includes ***/ 
-#include <unistd.h>
-#include <termios.h>
-#include <sys/ioctl.h>
+Kore::Kore(){
+    cx = 0;
+    cy = 0;
+    rx = 0;
+    row_off = 0;
+    col_off = 0;
+    max_rows = 0;
+    row = std::vector<ERow>();
+    file_name = "";
+    running = true;
+    edited = false;
+    if(get_window_size(&screen_rows, &screen_cols) == -1)
+        die("get_window_size");
+    screen_rows -= 2;
+    editor_set_status("HELP: CTRL-Q to quit");
+}
+Kore::Kore(char *file) : Kore(){
+    editor_open(file);
+}
 
-#include <cstdlib>
-#include <cctype>
-#include <cstdio>
-#include <cerrno>
-#include <cstring>
-#include <cstdarg>
-
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <vector>
-#include <algorithm>
-#include <chrono>
-#include <sstream>
-#include <iterator>
-
-/*** defines ***/ 
-#define KORE_VERSION "0.1"
-
-#define TAB_SIZE 4
-
-#define CTRL_KEY(k) ((k) & 0x1f)
-#define ARROW_LEFT 1000
-#define ARROW_RIGHT 1001
-#define ARROW_UP 1002
-#define ARROW_DOWN 1003
-#define HOME_KEY 1004
-#define PAGE_UP 1005
-#define PAGE_DOWN 1006
-#define END_KEY 1007
-#define DELETE_KEY 1008
-#define BACKSPACE 127
-
-bool match_insensitive(char, char);
-int editor_cx_to_rx(ERow, int);
-int editor_read_key();
-int editor_rx_to_cx(ERow, int);
-int get_window_size(int*, int*);
-void die(const char*);
-void disable_raw_mode();
-void editor_append_row(std::string);
-void editor_delete_char();
-void editor_delete_row(int);
-void editor_draw_msg(std::string*);
-void editor_draw_rows(std::string*);
-void editor_draw_status(std::string*);
-void editor_find();
-void editor_insert_char(int);
-void editor_insert_newline();
-void editor_insert_row(int, std::string);
-void editor_move_cursor(int);
-void editor_open(char*);
-void editor_open(char*);
-void editor_process_keypress();
-void editor_refresh_screen();
-void editor_row_append_string(ERow*, std::string);
-void editor_row_delete_char(ERow*, int);
-void editor_row_insert_char(ERow*, int, char);
-void editor_scroll();
-void editor_set_status(const char*, ...);
-void editor_update_row(ERow*);
-void enable_raw_mode();
-void init_editor();
-std::string editor_prompt(std::string);
-std::string editor_rows_to_string();
-
-#pragma region DATA
-/*** data ***/
-struct ERow {
-    int size;
-    int rsize;
-    std::string str;
-    std::string render;
-};
-
-struct EditorConfig
+/* struct EditorConfig
 {
     int cx, cy, rx;
     int row_off;
@@ -95,48 +36,29 @@ struct EditorConfig
     termios og_termios;
 };
 
-EditorConfig E;
+EditorConfig E; */
 #pragma endregion DATA
 
 
 #pragma region TERMINAL
 /*** terminal ***/ 
 
+bool Kore::dead(){
+    return running;
+}
+
+
 //exit function
-void die(const char *s){
+void Kore::die(const char *s){
     write(STDOUT_FILENO, "\x1b[2J", 4);
     write(STDOUT_FILENO, "\x1b[H", 3);
     perror(s); // set errno to indicate what happened
-    exit(1); // exit
+    this->running = false; // exit
 }
 
-//enable echoing
-void disable_raw_mode(){
-    if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.og_termios) == -1)
-        die("tcsetarr");
-}
 
-//disable echoing
-void enable_raw_mode(){
-    if(tcgetattr(STDIN_FILENO, &E.og_termios) == -1)
-        die("tcsetarr");
-    atexit(disable_raw_mode); // trigger disable_raw_mode() on exit
-    
-    termios raw = E.og_termios;
-    
-    raw.c_cflag |= CS8; // character size to 8 bits 
-    raw.c_iflag &= ~(ICRNL | IXON | BRKINT | ISTRIP | INPCK); // ctrl-m, ctrl-s+q
-    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG); //echo, canonical mode, ctrl-v+o, ctrl-c+z 
-    raw.c_oflag &= ~(OPOST); //output processing
 
-    raw.c_cc[VMIN] = 0; //min bytes for read() to return
-    raw.c_cc[VTIME] = 1; // 0.1 second wait time before read() returns
-
-    if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1)
-        die("tcsetarr");
-}
-
-int editor_read_key(){
+int Kore::editor_read_key(){
     int nread;
     char c;
     while((nread = read(STDIN_FILENO, &c, 1)) != 1)
@@ -187,12 +109,11 @@ int editor_read_key(){
             }   
         }
         return '\x1b';
-    } else {
-        return c;
     }
+    return c;
 }
 
-int get_window_size(int *rows, int *cols){
+int Kore::get_window_size(int *rows, int *cols){
     winsize ws;
     //TODO: fallback for no ioctl support
     if(ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0){
@@ -208,7 +129,7 @@ int get_window_size(int *rows, int *cols){
 
 #pragma region ROW_OPERATIONS
 
-int editor_cx_to_rx(ERow row, int cx){
+int Kore::editor_cx_to_rx(ERow row, int cx){
     //int rx = cx + std::count(row.str.begin(), row.str.end(), '\t')*((TAB_SIZE-1)-(rx%TAB_SIZE));
     int rx = 0;
     for(int i = 0; i < cx; i++){
@@ -218,11 +139,10 @@ int editor_cx_to_rx(ERow row, int cx){
     }
     return rx;
 }
-int editor_rx_to_cx(ERow row, int rx){
+int Kore::editor_rx_to_cx(ERow row, int rx){
     //int rx = cx + std::count(row.str.begin(), row.str.end(), '\t')*((TAB_SIZE-1)-(rx%TAB_SIZE));
-    int temp = 0;
     int i = 0;
-    for(; i < row.size, temp <= rx; i++){
+    for(int temp = 0; i < row.size && temp <= rx; i++){
         if(row.str[i] == '\t')
             temp += (TAB_SIZE-1)-(temp%TAB_SIZE);
         temp++;
@@ -230,7 +150,7 @@ int editor_rx_to_cx(ERow row, int rx){
     return i;
 }
 
-void editor_update_row(ERow *row){
+void Kore::editor_update_row(ERow *row){
     row->render = std::string(row->str);
     for (auto pos = row->render.find('\t'); pos != std::string::npos;){
         row->render.replace(pos, std::string::npos, TAB_SIZE, ' ');
@@ -240,99 +160,99 @@ void editor_update_row(ERow *row){
     row->rsize = row->render.size();
 }
 
-void editor_insert_row(int at, std::string str){
-    if(at < 0 || at > E.max_rows)
+void Kore::editor_insert_row(int at, std::string str){
+    if(at < 0 || at > this->max_rows)
         return;
-    E.row.resize(++E.max_rows);
-    E.row.insert(E.row.begin()+at, (ERow){(int)str.size(), 0, std::string(str), ""});
-    editor_update_row(&E.row[at]);
-    E.edited = true;
+    this->row.resize(++this->max_rows);
+    this->row.insert(this->row.begin()+at, (ERow){(int)str.size(), 0, std::string(str), ""});
+    editor_update_row(&this->row[at]);
+    this->edited = true;
 }
 
-void editor_append_row(std::string str){
-    editor_insert_row(E.max_rows, str);
+void Kore::editor_append_row(std::string str){
+    editor_insert_row(this->max_rows, str);
 }
 
-void editor_row_append_string(ERow *row, std::string s){
+void Kore::editor_row_append_string(ERow *row, std::string s){
     row->str.append(s);
     row->size = row->str.size();
     editor_update_row(row);
-    E.edited = true;
+    this->edited = true;
 }
 
-void editor_row_insert_char(ERow *row, int at, char c){
+void Kore::editor_row_insert_char(ERow *row, int at, char c){
     if(at < 0 || at > row->size)
         at = row->size;
     row->str.insert(at, 1, c);
     row->size++;
     editor_update_row(row);
-    E.edited = true;
+    this->edited = true;
 }
 
-void editor_row_delete_char(ERow *row, int at){
+void Kore::editor_row_delete_char(ERow *row, int at){
     if(at < 0 || at >= row->size)
         return;
     row->str.erase(at, 1);
     row->size--;
     editor_update_row(row);
-    E.edited = true;
+    this->edited = true;
 }
 
-void editor_delete_row(int at){
-    if(at < 0 || at >= E.max_rows)
+void Kore::editor_delete_row(int at){
+    if(at < 0 || at >= this->max_rows)
         return;
-    E.row.erase(E.row.begin()+at);
-    E.max_rows--;
+    this->row.erase(this->row.begin()+at);
+    this->max_rows--;
 }
 #pragma endregion ROW_OPERATIONS
 
 
 #pragma region EDITOR_OPERATIONS
-void editor_insert_char(int c){
-    if(E.cy == E.max_rows)
+void Kore::editor_insert_char(int c){
+    if(this->cy == this->max_rows)
         editor_append_row("");
-    editor_row_insert_char(&E.row[E.cy], E.cx++, c);
+    editor_row_insert_char(&this->row[this->cy], this->cx++, c);
 }
 
-void editor_delete_char(){
-    if(E.cy == E.max_rows || E.cx == 0 && E.cy == 0)
+void Kore::editor_delete_char(){
+    if(this->cy == this->max_rows || this->cx == 0 && this->cy == 0)
         return;
-    if(E.cx > 0){
-        editor_row_delete_char(&E.row[E.cy], --E.cx);
+    if(this->cx > 0){
+        editor_row_delete_char(&this->row[this->cy], --this->cx);
     } else {
-        E.cx = E.row[E.cy-1].size;
-        editor_row_append_string(&E.row[E.cy-1], E.row[E.cy].str);
-        editor_delete_row(E.cy--);
+        this->cx = this->row[this->cy-1].size;
+        editor_row_append_string(&this->row[this->cy-1], this->row[this->cy].str);
+        editor_delete_row(this->cy--);
     }
 }
 
-void editor_insert_newline(){
-    if(E.cx == 0){
-        editor_insert_row(E.cy, "");
+void Kore::editor_insert_newline(){
+    if(this->cx == 0){
+        editor_insert_row(this->cy, "");
     } else {
-        editor_insert_row(E.cy+1, E.row[E.cy].str.substr(E.cx));
-        E.row[E.cy].str.erase(E.cx);
-        E.row[E.cy].size = E.cx;
-        editor_update_row(&E.row[E.cy]);
+        editor_insert_row(this->cy+1, this->row[this->cy].str.substr(this->cx));
+        this->row[this->cy].str.erase(this->cx);
+        this->row[this->cy].size = this->cx;
+        editor_update_row(&this->row[this->cy]);
     }
-    E.cx = 0;
-    E.cy++;
+    this->cx = 0;
+    this->cy++;
 }
 #pragma endregion EDITOR_OPERATIONS
 
 
 #pragma region FILEIO
 
-std::string editor_rows_to_string(){
+std::string Kore::editor_rows_to_string(){
     std::stringstream ss;
-    for(auto row : E.row){
+    for(auto row : this->row){
         ss << row.str << "\n";
     }
     return ss.str();
 }
 
-void editor_open(char *file_name){
-    E.file_name = std::string(file_name);
+void Kore::editor_open(char *file_name){
+    this->file_name = std::string(file_name);
 
     std::ifstream in_file(file_name);
     if(!in_file)
@@ -348,43 +268,43 @@ void editor_open(char *file_name){
     
 
     in_file.close();
-    E.edited = false;
+    this->edited = false;
 }
 
-void editor_save(){ //TODO: make saving more secure
-    if(E.file_name.size() == 0)
-        if((E.file_name = editor_prompt("Save as: %s")).size() == 0){
+void Kore::editor_save(){ //TODO: make saving more secure
+    if(this->file_name.size() == 0)
+        if((this->file_name = editor_prompt("Save as: %s")).size() == 0){
             editor_set_status("Save exited");    
             return;
         }
     std::string buff = editor_rows_to_string();
-    std::ofstream out_file(E.file_name, std::ofstream::out);
+    std::ofstream out_file(this->file_name, std::ofstream::out);
     if(!out_file.is_open())
         editor_set_status("Can't save: %s", strerror(errno));
     out_file << buff;
     out_file.close();
     editor_set_status("%d bytes saved to disk.", buff.length());
-    E.edited = false;
+    this->edited = false;
 }
 
 #pragma endregion FILEIO
 
 #pragma region SPECIAL_FUNCTIONS
 
-bool match_insensitive(char a, char b){
+bool Kore::match_insensitive(char a, char b){
     return (tolower(a) == tolower(b));
 }
 
-void editor_find(){
+void Kore::editor_find(){
     std::string target = editor_prompt("Find: %s (ESC to cancel)");
     if(target.size() == 0)
         return;
     std::string::iterator f;
-    for(int i = 0; i < E.max_rows; i++){
-        if((f = std::search(E.row[i].render.begin(), E.row[i].render.end(), target.begin(), target.end(), match_insensitive)) != E.row[i].render.end()){
-            E.cx = editor_rx_to_cx(E.row[i], f - E.row[i].render.begin()); 
-            E.cy = i;
-            E.row_off = E.max_rows;
+    for(int i = 0; i < this->max_rows; i++){
+        if((f = std::search(this->row[i].render.begin(), this->row[i].render.end(), target.begin(), target.end(), match_insensitive)) != this->row[i].render.end()){
+            this->cx = editor_rx_to_cx(this->row[i], f - this->row[i].render.begin()); 
+            this->cy = i;
+            this->row_off = this->max_rows;
             return;
         }
     }
@@ -395,37 +315,37 @@ void editor_find(){
 #pragma region OUTPUT
 /*** output ***/
 
-void editor_scroll(){
-    E.rx = 0;
-    if(E.cy < E.max_rows){
-        E.rx = editor_cx_to_rx(E.row[E.cy], E.cx);
+void Kore::editor_scroll(){
+    this->rx = 0;
+    if(this->cy < this->max_rows){
+        this->rx = editor_cx_to_rx(this->row[this->cy], this->cx);
     }
-    if(E.cy < E.row_off){
-        E.row_off = E.cy;
+    if(this->cy < this->row_off){
+        this->row_off = this->cy;
     }
-    if(E.cy >= E.row_off + E.screen_rows){
-        E.row_off = E.cy - E.screen_rows + 1;
+    if(this->cy >= this->row_off + this->screen_rows){
+        this->row_off = this->cy - this->screen_rows + 1;
     }
-    if(E.rx < E.col_off){
-        E.col_off = E.rx;
+    if(this->rx < this->col_off){
+        this->col_off = this->rx;
     }
-    if(E.rx >= E.col_off + E.screen_cols){
-        E.col_off = E.rx - E.screen_cols + 1;
+    if(this->rx >= this->col_off + this->screen_cols){
+        this->col_off = this->rx - this->screen_cols + 1;
     }
 }
 
-void editor_draw_rows(std::string *buff){
-    for(int y = 0; y < E.screen_rows-1; y++){
-        int file_row = y + E.row_off; //account for row_offset
-        if(file_row >= E.max_rows){ // check if row is part of the text buffer
-            if (E.max_rows == 0 && y == E.screen_rows / 3) { // print welcome message 1/3 down the screen
+void Kore::editor_draw_rows(std::string *buff){
+    for(int y = 0; y < this->screen_rows-1; y++){
+        int file_row = y + this->row_off; //account for row_offset
+        if(file_row >= this->max_rows){ // check if row is part of the text buffer
+            if (this->max_rows == 0 && y == this->screen_rows / 3) { // print welcome message 1/3 down the screen
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome), "Kore editor -- ver %s", KORE_VERSION);
-                if(welcomelen > E.screen_cols){
-                    welcomelen = E.screen_cols;
+                if(welcomelen > this->screen_cols){
+                    welcomelen = this->screen_cols;
                 }
                 //center welcome
-                int pad = (E.screen_cols - welcomelen)/2;
+                int pad = (this->screen_cols - welcomelen)/2;
                 if(pad){
                     buff->append(">", 1);
                     pad--;
@@ -438,23 +358,23 @@ void editor_draw_rows(std::string *buff){
                 buff->append(">", 1);
             }
         } else {
-            buff->append(E.row[file_row].render.substr(E.col_off));
+            buff->append(this->row[file_row].render.substr(this->col_off));
         }
         buff->append("\x1b[K", 3); //erase line to right of cursor
         buff->append("\r\n", 2);
     }
 }
 
-void editor_draw_status(std::string *buff){
+void Kore::editor_draw_status(std::string *buff){
     buff->append("\x1b[7m", 4);
     char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s%s - %d lines", (E.file_name.size() > 0 ? E.file_name.c_str() : "[No Name]"), (E.edited ? "(*)" : ""),  E.max_rows);
-    int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy+1, E.max_rows);
-    if(len > E.screen_cols)
-        len = E.screen_cols;
+    int len = snprintf(status, sizeof(status), "%.20s%s - %d lines", (this->file_name.size() > 0 ? this->file_name.c_str() : "[No Name]"), (this->edited ? "(*)" : ""),  this->max_rows);
+    int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", this->cy+1, this->max_rows);
+    if(len > this->screen_cols)
+        len = this->screen_cols;
     buff->append(status, len);
-    for(int i = len; i < E.screen_cols; i++){
-        if(E.screen_cols - i == rlen){
+    for(int i = len; i < this->screen_cols; i++){
+        if(this->screen_cols - i == rlen){
             buff->append(rstatus, rlen);
             break;
         } else{
@@ -467,17 +387,17 @@ void editor_draw_status(std::string *buff){
     buff->append("\r\n", 2);
 }
 
-void editor_draw_msg(std::string *buff){
+void Kore::editor_draw_msg(std::string *buff){
     buff->append("\x1b[K", 3);
-    int msglen = E.status_msg.length();
-    if(msglen > E.screen_cols)
-        msglen = E.screen_cols;
-    auto t = std::chrono::duration_cast<std::chrono::duration<int>>(std::chrono::steady_clock::now() - E.status_time);
+    int msglen = this->status_msg.length();
+    if(msglen > this->screen_cols)
+        msglen = this->screen_cols;
+    auto t = std::chrono::duration_cast<std::chrono::duration<int>>(std::chrono::steady_clock::now() - this->status_time);
     if(msglen && t.count() < 5)
-        buff->append(E.status_msg);
+        buff->append(this->status_msg);
 }
 
-void editor_refresh_screen(){
+void Kore::editor_refresh_screen(){
     //J - erase in display
     //2 - clear whole terminal
     // \x1b is escape character
@@ -495,7 +415,7 @@ void editor_refresh_screen(){
     editor_draw_msg(&buff);
 
     char tempbuff[32];
-    snprintf(tempbuff, sizeof(tempbuff), "\x1b[%d;%dH", (E.cy-E.row_off)+1, (E.rx-E.col_off)+1);
+    snprintf(tempbuff, sizeof(tempbuff), "\x1b[%d;%dH", (this->cy-this->row_off)+1, (this->rx-this->col_off)+1);
     buff.append(tempbuff);
 
     buff.append("\x1b[?25h", 6);
@@ -506,14 +426,14 @@ void editor_refresh_screen(){
     write(STDOUT_FILENO, cbuff, buff.length()); 
 }
 
-void editor_set_status(const char *fmt, ...){
+void Kore::editor_set_status(const char *fmt, ...){
     char msg[80];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
-    E.status_msg = std::string(msg);
-    E.status_time = std::chrono::steady_clock::now();
+    this->status_msg = std::string(msg);
+    this->status_time = std::chrono::steady_clock::now();
 }
 
 #pragma endregion OUTPUT
@@ -522,7 +442,7 @@ void editor_set_status(const char *fmt, ...){
 #pragma region INPUT
 /*** input ***/ 
 
-std::string editor_prompt(std::string prompt){
+std::string Kore::editor_prompt(std::string prompt){
     std::string res;
     while(true){
         editor_set_status(prompt.c_str(), res.c_str());
@@ -544,44 +464,44 @@ std::string editor_prompt(std::string prompt){
     }
 }
 
-void editor_move_cursor(int key){
+void Kore::editor_move_cursor(int key){
     switch (key)
     {
         case ARROW_UP:
-            if(E.cy != 0)
-                E.cy--;
+            if(this->cy != 0)
+                this->cy--;
             break;
         case ARROW_LEFT:
-            if(E.cx != 0)
-                E.cx--;
-            else if(E.cy > 0)
-                E.cx = E.row[--E.cy].size;
+            if(this->cx != 0)
+                this->cx--;
+            else if(this->cy > 0)
+                this->cx = this->row[--this->cy].size;
             break;
         case ARROW_DOWN:
-            if(E.cy < E.max_rows)
-                E.cy++;
+            if(this->cy < this->max_rows)
+                this->cy++;
             break;
         case ARROW_RIGHT:
-            if(E.cy < E.max_rows && E.cx < E.row[E.cy].size)
-                E.cx++;
-            else if(E.cy < E.max_rows && E.cx == E.row[E.cy].size)
-                E.cy++, E.cx = 0;
+            if(this->cy < this->max_rows && this->cx < this->row[this->cy].size)
+                this->cx++;
+            else if(this->cy < this->max_rows && this->cx == this->row[this->cy].size)
+                this->cy++, this->cx = 0;
             break;
     }
     //snap to end of next line
-    int len = (E.cy < E.max_rows) ? E.row[E.cy].size : 0;
-    if(E.cx > len){
-        E.cx = len;
+    int len = (this->cy < this->max_rows) ? this->row[this->cy].size : 0;
+    if(this->cx > len){
+        this->cx = len;
     }
 }
 
-void editor_process_keypress(){
+void Kore::editor_process_keypress(){
     int c = editor_read_key();
     switch(c){
         case CTRL_KEY('q'):
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);
-            exit(0);
+            this->running = false;
             break;
         case CTRL_KEY('s'):
             editor_save();
@@ -597,23 +517,23 @@ void editor_process_keypress(){
         case PAGE_DOWN:
             {
                 if(c == PAGE_UP){
-                    E.cy = E.row_off;
+                    this->cy = this->row_off;
                 } else if(c == PAGE_DOWN){
-                    E.cy = E.row_off + E.screen_cols - 1;
-                    if(E.cy > E.max_rows)
-                        E.cy = E.max_rows;
+                    this->cy = this->row_off + this->screen_cols - 1;
+                    if(this->cy > this->max_rows)
+                        this->cy = this->max_rows;
                 }
-                int x = E.screen_rows;
+                int x = this->screen_rows;
                 while(x--)
                     editor_move_cursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
             }
             break;
         case HOME_KEY:
-            E.cx = 0;
+            this->cx = 0;
             break;
         case END_KEY:
-            if(E.cy < E.max_rows)
-                E.cx = E.row[E.cy].size;
+            if(this->cy < this->max_rows)
+                this->cx = this->row[this->cy].size;
             break;
         case BACKSPACE:
             editor_delete_char();
@@ -639,7 +559,7 @@ void editor_process_keypress(){
 
 #pragma region INIT
 /*** init ***/ 
-void init_editor(){
+/* void init_editor(){
     E.cx = 0;
     E.cy = 0;
     E.rx = 0;
@@ -652,21 +572,7 @@ void init_editor(){
     if(get_window_size(&E.screen_rows, &E.screen_cols) == -1)
         die("get_window_size");
     E.screen_rows -= 2;
-}
+} */
 
-int main(int argc, char *argv[]){
-    enable_raw_mode();
-    init_editor();
-    if(argc >= 2){
-        editor_open(argv[1]);
-    }
-    
-    editor_set_status("HELP: CTRL-Q to quit");
 
-    while(true){
-        editor_refresh_screen();
-        editor_process_keypress();
-    }
-    return 0;
-}
 #pragma endregion INIT

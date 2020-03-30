@@ -1,11 +1,11 @@
-objects = *.o kore
+objects = *.o kim
 
 CC = $(CXX)
 CXXFLAGS = -Wall
 
-all: kore
+all: kim
 
-kore : kore.o main.o
+kim : kore.o main.o
 	$(CC) $(CXXFLAGS) *.cpp -o kore
 
 .PHONY : clean
